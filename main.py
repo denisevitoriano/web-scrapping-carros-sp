@@ -1,35 +1,20 @@
-def main():
-    import pandas as pd
-    import time
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.by import By
-    from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+import pandas as pd
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
-    # Define as opções do Chrome
-    chrome_options = Options()
-    chrome_options.add_argument("--start-maximixed")
-    chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--disable-extensions")
-
-    # Inicializa o WebDriver para baixar a versão correta do ChromeDriver
-    # e iniciar o navegador com as opções definidas
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-
-    # Define o tempo de espera máximo para encontrar elementos
-    wait = WebDriverWait(driver, 5)
-
-    # URL do site a ser acessado para fazer o scraping
-    url = "https://carrosp.com.br/revendas/"
-
-    # Acessa a URL no navegador
-    driver.get(url)
-
-    # Aguarda e clica no botão de aceitar cookies, se existir
+def aceitar_cookies(driver, wait):
+    """
+    Aceita os cookies na página principal.
+    Args:
+        driver (webdriver): Instância do WebDriver.
+        wait (WebDriverWait): Instância do WebDriverWait para aguardar elementos.
+    """
     try:
         aceitar_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Entendi')]")))
         aceitar_btn.click()
@@ -37,72 +22,123 @@ def main():
     except Exception:
         print("Botão de cookies não encontrado ou já fechado.")
 
-    # Encontra os elememtos pela classe específica
-    class_elements = driver.find_elements("class name", "col-md-4.col-ms-12.col-6.mb-4.pl-0.pl-sm-3")
+def extrair_lojas(driver, wait):
+    """
+    Extrai as lojas da página principal.
 
-    # Encontra todos os elementos <a> que têm links
-    link_elements = driver.find_elements("tag name", "a")
-    print(f"links encontrados: {link_elements}")
+    Args:
+        driver (webdriver): Instância do WebDriver.
+        wait (WebDriverWait): Instância do WebDriverWait para aguardar elementos.
 
-    # Extrai as URLs dos links encontrados e fltra os que não são vazios
-    urls = [link.get_attribute("href") for link in link_elements if link.get_attribute("href") is not None]
+    Returns:
+        list: Lista de elementos <li> que contêm as informações das lojas.
+    """
+    return wait.until(EC.presence_of_all_elements_located(
+        (By.CSS_SELECTOR, "li.col-md-4.col-ms-12.col-6.mb-4.pl-0.pl-sm-3")
+    ))
 
-    # Extrai o texto dos elementos encontrados da classe específica
-    class_texts = [element.text for element in class_elements]
 
-    # Remove as primeiras entradas de urls
-    urls = urls[17:]
-    urls = urls[:-71]
+def extrair_nome_e_url(loja):
+    """
+    Extrai o nome e a URL de uma loja.
+    Args:
+        loja (WebElement): Elemento Web que representa a loja.
+    """
+    a_tag = loja.find_element(By.TAG_NAME, "a")
+    return a_tag.text, a_tag.get_attribute("href")
 
-    # Garante que class_texts e urls tenham o mesmo tamanho
-    min_len = min(len(class_texts), len(urls))
-    class_texts = class_texts[:min_len]
-    urls = urls[:min_len]
 
-    print(f"Número de URLs encontradas: {len(urls)}")
-    print(f"Número de textos de classe encontrados: {len(class_texts)}")
-    print(f"Número mínimo entre URLs e textos de classe: {min_len}")
-    
-    # Cria um DataFrame com duas colunas
+def extrair_telefones(driver, wait, nome):
+    """
+    Extrai os números de telefone de uma loja.
+    Args:
+        driver (webdriver): Instância do WebDriver.
+        wait (WebDriverWait): Instância do WebDriverWait para aguardar elementos.
+        nome (str): Nome da loja, usado para mensagens de erro.
+    """
+    try:
+        botao_telefone = wait.until(
+            EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'telefone')]"))
+        )
+        botao_telefone.click()
+    except Exception:
+        print(f"Botão 'Ver telefone' não encontrado para {nome}")
+        return "Não encontrado"
+
+    try:
+        ver_telefone_div = wait.until(EC.visibility_of_element_located((By.ID, "verTelefone")))
+        telefones = [
+            li.find_element(By.TAG_NAME, "span").text
+            for li in ver_telefone_div.find_elements(By.CSS_SELECTOR, "ul.exibindo-fone li")
+        ]
+        return " / ".join(telefones) if telefones else "Não encontrado"
+    except Exception:
+        print(f"Telefones não encontrados para {nome}")
+        return "Não encontrado"
+
+def main():
+    """
+    Main function to scrape car dealerships from carrosp.com.br
+    This function initializes the WebDriver, navigates to the target URL,
+    accepts cookies, extracts dealership names, URLs, and phone numbers,
+    and saves the data to a CSV file.
+    """
+    # Início do contador
+    inicio = datetime.now()
+    print("Início:", inicio.strftime("%Y-%m-%d %H:%M:%S"))
+
+    chrome_options = Options()
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-extensions")
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    wait = WebDriverWait(driver, 5)
+
+    url = "https://carrosp.com.br/revendas/"
+    driver.get(url)
+    aceitar_cookies(driver, wait)
+
+    nomes_lojas = []
+    urls_lojas = []
+    telefones_lojas = []
+
+    lojas = extrair_lojas(driver, wait)
+    total_lojas = len(lojas)
+    print(f"Total de lojas: {len(lojas)}")
+
+    for i in range(total_lojas):
+        # Sempre recarrega a lista de lojas para evitar elementos "stale"
+        lojas = extrair_lojas(driver, wait)
+        loja = lojas[i]
+        nome, link = extrair_nome_e_url(loja)
+        nomes_lojas.append(nome)
+        urls_lojas.append(link)
+
+        driver.get(link)
+        telefone = extrair_telefones(driver, wait, nome)
+        telefones_lojas.append(telefone)
+
+        driver.back()
+
     data = {
-        "loja": class_texts[:len(urls)], # Limita o tamanho ao número de URLs
-        "url": urls
+        "loja": nomes_lojas,
+        "url": urls_lojas,
+        "telefone": telefones_lojas
     }
 
     df = pd.DataFrame(data)
+    print(f"O Dataframe possui {df.shape[0]} linhas e {df.shape[1]} colunas.")
 
-    # Adiciona a coluna "telefone"
-    df["telefone"] = None # Inicializa a coluna com valores nulos
-
-    # Extrai os números de telefone de cada link
-    for i, row in df.iterrows():
-        link = row["url"]
-        driver.get(link) # Acessa cada link individualmente
-        
-        for attempt in range(3):  # Tenta até 3 vezes
-            try:
-                # Clica no botão para revelar o telefone
-                ver_telefone_button = driver.find_element("xpath", "/html/body/div[2]/main/div[1]/div/div/div[2]/div[2]/div[4]/div/div/div[2]/button[2]")
-                ver_telefone_button.click()  
-    
-                # Busca o elemento que contém o telefone
-                telefone_element = driver.find_element("xpath", "//*[@id='verTelefone']/div/div[2]/div")
-                telefone = telefone_element.text.strip()  # Extrai o texto e remove espaços em branco
-                df.at[i, "telefone"] = telefone  # Atualiza o DataFrame com o telefone encontrado        
-            except (NoSuchElementException, StaleElementReferenceException):
-                # Se não encontrar o telefone, registra uma mensagem padrão
-                time.sleep(1) # Aguarda e tenta de novo
-                if attempt == 2:
-                    df.at[i, "telefone"] = "Telefone não encontrado"
-
-    # Exibe o DataFrame resultante
-    print(df)
-    
-    # Salva o DataFrame em um arquivo CSV
     df.to_csv("telefones_anuciantes_carros_sp.csv", index=False, encoding="utf-8")
-    
-    # Fecha o navegador
+    print("Arquivo CSV criado com sucesso.")
+
     driver.quit()
+
+    # Fim do contador
+    fim = datetime.now()
+    print("Fim:", fim.strftime("%Y-%m-%d %H:%M:%S"))
+    print("Duração:", str(fim - inicio))
 
 if __name__ == "__main__":
     main()
